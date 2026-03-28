@@ -70,13 +70,8 @@ def do_archive(console: Console) -> None:
     logger, log_path = setup_logger("archive")
 
     def _daemon_task(source_dir, archive_path, total_bytes, log_path):
-        import logging
-        lgr = logging.getLogger("transfer.daemon.archive")
-        lgr.handlers.clear()
-        fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-        lgr.addHandler(fh)
-        lgr.setLevel(logging.DEBUG)
+        from ..infra.logger import make_daemon_logger
+        lgr = make_daemon_logger("archive", log_path)
         run_archive(source_dir, archive_path, total_bytes, lgr)
 
     pid = daemonize(

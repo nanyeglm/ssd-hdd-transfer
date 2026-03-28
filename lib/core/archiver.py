@@ -15,7 +15,7 @@ import time
 
 from ..infra.checksum import save_checksum
 from ..infra.disk import format_size, get_free_space
-from ..infra.logger import log_progress, log_summary
+from ..infra.logger import log_progress, log_summary, monitor_percentage
 
 MKSQUASHFS_OPTS = [
     "-comp", "zstd",
@@ -74,7 +74,7 @@ def _two_phase_archive(
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         )
-        _monitor_percentage(proc, logger)
+        monitor_percentage(proc, logger)
         proc.wait()
         if proc.returncode != 0:
             logger.error(f"mksquashfs 失败, 退出码: {proc.returncode}")
@@ -136,7 +136,7 @@ def _direct_archive(
         proc = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
         )
-        _monitor_percentage(proc, logger)
+        monitor_percentage(proc, logger)
         proc.wait()
         if proc.returncode != 0:
             logger.error(f"mksquashfs 失败, 退出码: {proc.returncode}")
@@ -228,22 +228,6 @@ def _inline_hash_copy(
     if not digest:
         logger.error("xxh128sum 输出为空")
     return digest
-
-
-def _monitor_percentage(proc: subprocess.Popen, logger: logging.Logger) -> None:
-    last_pct = -1
-    for raw in proc.stdout:
-        line = raw.decode(errors="replace").strip()
-        if not line:
-            continue
-        try:
-            pct = int(line)
-        except ValueError:
-            logger.debug(line)
-            continue
-        if pct != last_pct and 0 <= pct <= 100:
-            log_progress(logger, pct)
-            last_pct = pct
 
 
 def _cleanup(*paths: str) -> None:

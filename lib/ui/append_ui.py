@@ -10,7 +10,8 @@ from rich.table import Table
 from ..core.appender import detect_conflicts, run_append
 from ..infra.daemon import daemonize
 from ..infra.disk import (
-    format_size, get_dir_stats, validate_archive, validate_source_dir,
+    format_size, get_dir_stats, get_free_space,
+    validate_archive, validate_source_dir,
 )
 from ..infra.logger import setup_logger
 from .progress import follow_log
@@ -37,6 +38,14 @@ def do_append(console: Console) -> None:
 
     src_bytes, src_count = get_dir_stats(str(src_path))
     archive_size = os.path.getsize(str(archive_path))
+
+    hdd_free = get_free_space(str(archive_path))
+    if src_bytes > hdd_free:
+        console.print(
+            f"[red]HDD 空间不足: 追加数据 {format_size(src_bytes)}, "
+            f"可用 {format_size(hdd_free)}[/]"
+        )
+        return
 
     try:
         conflicts = detect_conflicts(str(archive_path), str(src_path))
@@ -76,13 +85,8 @@ def do_append(console: Console) -> None:
     logger, log_path = setup_logger("append")
 
     def _daemon_task(source_dir, archive_path, conflicts, timestamp, log_path):
-        import logging
-        lgr = logging.getLogger("transfer.daemon.append")
-        lgr.handlers.clear()
-        fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-        lgr.addHandler(fh)
-        lgr.setLevel(logging.DEBUG)
+        from ..infra.logger import make_daemon_logger
+        lgr = make_daemon_logger("append", log_path)
         run_append(source_dir, archive_path, conflicts, lgr, timestamp=timestamp)
 
     pid = daemonize(

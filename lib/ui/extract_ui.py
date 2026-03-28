@@ -108,7 +108,7 @@ def do_path_extract(console: Console) -> None:
         _display_directory(console, current_dir, children, entries)
 
         console.print(
-            "\n[dim]操作: 序号=展开  e 序号=选中  ..=上级  list=已选  done=执行  q=返回[/]"
+            "\n[dim]操作: 序号=展开  e 序号=选中  r 序号=取消选中  ..=上级  list=已选  done=执行  q=返回[/]"
         )
         cmd = Prompt.ask(">").strip()
 
@@ -125,6 +125,17 @@ def do_path_extract(console: Console) -> None:
                 continue
             _confirm_and_extract(console, str(archive_path), selected, entries)
             return
+        elif cmd.lower().startswith("r "):
+            idx_str = cmd[2:].strip()
+            try:
+                idx = int(idx_str) - 1
+                if 0 <= idx < len(selected):
+                    removed = selected.pop(idx)
+                    console.print(f"  [red][-] 已移除: {removed}[/]")
+                else:
+                    console.print(f"[yellow]序号超出范围 (1-{len(selected)})[/]")
+            except ValueError:
+                console.print("[red]无效序号 (用 list 查看清单序号)[/]")
         elif cmd.lower().startswith("e "):
             idx_str = cmd[2:].strip()
             try:
@@ -317,13 +328,8 @@ def _launch_extract_daemon(
     logger, log_path = setup_logger("extract" if not use_restore else "restore")
 
     def _daemon_task(archive_path, target_dir, paths, log_path, use_restore):
-        import logging
-        lgr = logging.getLogger(f"transfer.daemon.extract")
-        lgr.handlers.clear()
-        fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-        lgr.addHandler(fh)
-        lgr.setLevel(logging.DEBUG)
+        from ..infra.logger import make_daemon_logger
+        lgr = make_daemon_logger("restore" if use_restore else "extract", log_path)
         if use_restore:
             run_restore(archive_path, target_dir, lgr)
         else:

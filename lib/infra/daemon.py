@@ -1,4 +1,7 @@
-"""Daemon process management: fork+setsid, PID lock file, signal handling."""
+"""Daemon process management: fork+setsid, PID lock file, signal handling.
+
+Uses os.pipe() for reliable parent-child PID synchronization (no file polling).
+"""
 
 import atexit
 import json
@@ -12,7 +15,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 LOCK_FILE = Path(__file__).resolve().parent.parent.parent / ".transfer.lock"
-_PID_READY = Path(__file__).resolve().parent.parent.parent / ".daemon_pid"
 
 LOCK_FAILED_MARKER = "LOCK_FAILED"
 
@@ -72,31 +74,32 @@ def daemonize(
 
     Returns the real daemon PID to the parent, or None if the daemon
     failed to start (e.g. lock acquisition failure).
+
+    Uses os.pipe() for synchronization: the daemon writes its PID (or
+    LOCK_FAILED) through the pipe, and the parent reads it -- no file
+    polling, no timeout races.
     """
-    _PID_READY.unlink(missing_ok=True)
+    r_fd, w_fd = os.pipe()
 
     pid = os.fork()
     if pid > 0:
-        # Parent: wait for daemon to write its real PID
-        for _ in range(20):
-            time.sleep(0.15)
-            if _PID_READY.exists():
-                content = _PID_READY.read_text().strip()
-                _PID_READY.unlink(missing_ok=True)
-                if content == LOCK_FAILED_MARKER:
-                    return None
-                try:
-                    return int(content)
-                except ValueError:
-                    return None
-        _PID_READY.unlink(missing_ok=True)
-        return None
+        os.close(w_fd)
+        with os.fdopen(r_fd, "r") as r:
+            msg = r.read().strip()
+        if msg == LOCK_FAILED_MARKER:
+            return None
+        try:
+            return int(msg)
+        except ValueError:
+            return None
 
     # First child
+    os.close(r_fd)
     os.setsid()
 
     pid2 = os.fork()
     if pid2 > 0:
+        os.close(w_fd)
         os._exit(0)
 
     # Grand-child: the actual daemon
@@ -107,12 +110,13 @@ def daemonize(
     os.dup2(devnull, 2)
 
     if not acquire_lock(task_type, src, dst, log_path):
-        _PID_READY.write_text(LOCK_FAILED_MARKER)
+        with os.fdopen(w_fd, "w") as w:
+            w.write(LOCK_FAILED_MARKER)
         _write_crash_log(log_path, "已有任务正在运行，无法获取锁", is_lock_fail=True)
         os._exit(1)
 
-    # Signal real PID back to parent
-    _PID_READY.write_text(str(os.getpid()))
+    with os.fdopen(w_fd, "w") as w:
+        w.write(str(os.getpid()))
 
     atexit.register(release_lock)
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
@@ -131,12 +135,8 @@ def daemonize(
 def _write_crash_log(log_path: str, error: object, is_lock_fail: bool = False) -> None:
     """Write error info + DAEMON_EXIT to the log so follow_log can detect it."""
     try:
-        lgr = logging.getLogger("transfer.daemon.crash")
-        lgr.handlers.clear()
-        fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
-        lgr.addHandler(fh)
-        lgr.setLevel(logging.DEBUG)
+        from .logger import make_daemon_logger, SUMMARY_SEPARATOR
+        lgr = make_daemon_logger("crash", log_path)
 
         if is_lock_fail:
             lgr.error(f"{LOCK_FAILED_MARKER}: {error}")
@@ -144,7 +144,6 @@ def _write_crash_log(log_path: str, error: object, is_lock_fail: bool = False) -
             lgr.error(f"守护进程异常: {error}")
             lgr.error(traceback.format_exc())
 
-        from .logger import SUMMARY_SEPARATOR
         lgr.info(SUMMARY_SEPARATOR)
         lgr.info("SUMMARY_START")
         lgr.info(f"状态: {'锁冲突' if is_lock_fail else '异常退出'}")

@@ -14,7 +14,7 @@ from datetime import datetime
 
 from ..infra.checksum import checksum_path_for
 from ..infra.disk import format_size
-from ..infra.logger import log_progress, log_summary
+from ..infra.logger import log_summary, monitor_percentage
 from .browser import get_top_level_names, invalidate_cache, load_archive_tree
 
 
@@ -113,7 +113,7 @@ def run_append(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
         )
-        _monitor_percentage(proc, logger)
+        monitor_percentage(proc, logger)
         proc.wait()
         rc = proc.returncode
 
@@ -165,18 +165,3 @@ def _mark_checksum_stale(archive_path: str, logger: logging.Logger) -> None:
         logger.debug(f"标记校验和失效异常: {e}")
 
 
-def _monitor_percentage(proc: subprocess.Popen, logger: logging.Logger) -> None:
-    """Parse mksquashfs -percentage stdout (plain integer lines)."""
-    last_pct = -1
-    for raw in proc.stdout:
-        line = raw.decode(errors="replace").strip()
-        if not line:
-            continue
-        try:
-            pct = int(line)
-        except ValueError:
-            logger.debug(line)
-            continue
-        if pct != last_pct and 0 <= pct <= 100:
-            log_progress(logger, pct)
-            last_pct = pct

@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from ..infra.disk import format_size
-from ..infra.logger import log_progress, log_summary
+from ..infra.logger import log_summary, monitor_percentage
 
 
 def run_restore(
@@ -32,7 +32,7 @@ def run_restore(
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
         )
-        _monitor_percentage(proc, logger)
+        monitor_percentage(proc, logger)
         proc.wait()
         rc = proc.returncode
     except Exception as e:
@@ -60,18 +60,3 @@ def run_restore(
     return True, elapsed
 
 
-def _monitor_percentage(proc: subprocess.Popen, logger: logging.Logger) -> None:
-    last_pct = -1
-    for raw in proc.stdout:
-        line = raw.decode(errors="replace").strip()
-        if not line:
-            continue
-        try:
-            pct = int(line)
-        except ValueError:
-            if line and not line.startswith("["):
-                logger.debug(line)
-            continue
-        if pct != last_pct and 0 <= pct <= 100:
-            log_progress(logger, pct)
-            last_pct = pct
