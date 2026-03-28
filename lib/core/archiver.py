@@ -7,12 +7,10 @@ Two-phase pipeline for optimal speed:
 Falls back to direct-to-HDD if SSD temp space is insufficient.
 """
 
-import hashlib
 import logging
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 
 from ..infra.checksum import save_checksum
@@ -68,9 +66,9 @@ def _two_phase_archive(
     os.makedirs(SSD_STAGING_DIR, exist_ok=True)
     tmp_sqsh = os.path.join(SSD_STAGING_DIR, f"_tmp_{os.getpid()}.sqsh")
     start = time.time()
+    hash_val = ""
 
     try:
-        # Phase 1: mksquashfs -> SSD temp
         logger.info("阶段 1/2: 压缩归档到 SSD 暂存...")
         cmd = ["mksquashfs", source_dir, tmp_sqsh] + MKSQUASHFS_OPTS
         proc = subprocess.Popen(
@@ -89,9 +87,16 @@ def _two_phase_archive(
         phase1_time = time.time() - start
         logger.info(f"阶段 1 完成: {format_size(archive_size)}, {phase1_time:.1f}s")
 
-        # Phase 2: inline-hash copy SSD -> HDD
         logger.info("阶段 2/2: 内联 hash + 传输到 HDD...")
         hash_val = _inline_hash_copy(tmp_sqsh, archive_path, archive_size, logger)
+
+        if not hash_val:
+            logger.error("内联 hash 计算失败 (xxh128sum 返回空)")
+            _cleanup(tmp_sqsh, archive_path)
+            elapsed = time.time() - start
+            log_summary(logger, status="失败", operation="归档", 耗时=f"{elapsed:.1f}s", 错误="校验和计算失败")
+            return False, "", 0, elapsed
+
         save_checksum(hash_val, archive_path)
         logger.info(f"校验和: {hash_val}")
 
@@ -149,25 +154,30 @@ def _direct_archive(
     archive_size = os.path.getsize(archive_path) if os.path.exists(archive_path) else 0
 
     logger.info("正在计算校验和 (直写模式, 需读取 HDD)...")
+    hash_val = ""
+    hash_status = "成功"
     try:
         result = subprocess.run(
             ["xxh128sum", archive_path], capture_output=True, text=True, timeout=7200,
         )
-        hash_val = result.stdout.strip().split()[0] if result.returncode == 0 else ""
-        if hash_val:
+        if result.returncode == 0 and result.stdout.strip():
+            hash_val = result.stdout.strip().split()[0]
             save_checksum(hash_val, archive_path)
             logger.info(f"校验和: {hash_val}")
+        else:
+            logger.warning(f"xxh128sum 返回码: {result.returncode}")
+            hash_status = "成功(校验和计算失败)"
     except Exception as e:
         logger.warning(f"校验和失败: {e}")
-        hash_val = ""
+        hash_status = "成功(校验和计算失败)"
 
     elapsed = time.time() - start
     log_summary(
-        logger, status="成功", operation="归档",
+        logger, status=hash_status, operation="归档",
         源路径=source_dir, 源大小=format_size(total_bytes),
         归档文件=archive_path, 归档大小=format_size(archive_size),
         压缩率=f"{archive_size / max(total_bytes, 1) * 100:.1f}%",
-        校验和=hash_val or "N/A", 耗时=f"{elapsed:.1f}s",
+        校验和=hash_val or "未计算", 耗时=f"{elapsed:.1f}s",
     )
     return True, hash_val, archive_size, elapsed
 
@@ -180,8 +190,7 @@ def _inline_hash_copy(
 ) -> str:
     """Copy file from SSD to HDD while computing xxh128 hash inline.
 
-    Uses subprocess xxh128sum reading from a pipe fed by Python,
-    so we get the exact same hash format as the standalone tool.
+    Returns hex digest string, or empty string on failure.
     """
     hasher = subprocess.Popen(
         ["xxh128sum"],
@@ -209,8 +218,16 @@ def _inline_hash_copy(
 
     hasher.stdin.close()
     hasher.wait()
+
+    if hasher.returncode != 0:
+        logger.error(f"xxh128sum 内联计算失败, 退出码: {hasher.returncode}")
+        return ""
+
     raw = hasher.stdout.read().decode(errors="replace").strip()
-    return raw.split()[0] if raw else ""
+    digest = raw.split()[0] if raw else ""
+    if not digest:
+        logger.error("xxh128sum 输出为空")
+    return digest
 
 
 def _monitor_percentage(proc: subprocess.Popen, logger: logging.Logger) -> None:
@@ -222,8 +239,7 @@ def _monitor_percentage(proc: subprocess.Popen, logger: logging.Logger) -> None:
         try:
             pct = int(line)
         except ValueError:
-            if line and not line.startswith("["):
-                logger.debug(line)
+            logger.debug(line)
             continue
         if pct != last_pct and 0 <= pct <= 100:
             log_progress(logger, pct)

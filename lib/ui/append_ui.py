@@ -1,6 +1,7 @@
 """Append interaction flow: add SSD data to existing HDD archive."""
 
 import os
+from datetime import datetime
 
 from rich.console import Console
 from rich.prompt import Prompt, Confirm
@@ -48,6 +49,8 @@ def do_append(console: Console) -> None:
         if item not in conflicts
     ]
 
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
     table = Table(title="追加预览", border_style="yellow", show_header=False, padding=(0, 2))
     table.add_column("项目", style="bold")
     table.add_column("内容")
@@ -57,9 +60,7 @@ def do_append(console: Console) -> None:
     for item in new_items:
         table.add_row("[green][新增][/]", item)
     for item in conflicts:
-        from datetime import datetime
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        table.add_row("[yellow][冲突][/]", f"{item} -> {item}_{ts}")
+        table.add_row("[yellow][冲突][/]", f"{item} -> {item}_{timestamp}")
 
     console.print(table)
 
@@ -74,7 +75,7 @@ def do_append(console: Console) -> None:
 
     logger, log_path = setup_logger("append")
 
-    def _daemon_task(source_dir, archive_path, conflicts, log_path):
+    def _daemon_task(source_dir, archive_path, conflicts, timestamp, log_path):
         import logging
         lgr = logging.getLogger("transfer.daemon.append")
         lgr.handlers.clear()
@@ -82,7 +83,7 @@ def do_append(console: Console) -> None:
         fh.setFormatter(logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S"))
         lgr.addHandler(fh)
         lgr.setLevel(logging.DEBUG)
-        run_append(source_dir, archive_path, conflicts, lgr)
+        run_append(source_dir, archive_path, conflicts, lgr, timestamp=timestamp)
 
     pid = daemonize(
         task_func=_daemon_task,
@@ -90,6 +91,7 @@ def do_append(console: Console) -> None:
             source_dir=str(src_path),
             archive_path=str(archive_path),
             conflicts=conflicts,
+            timestamp=timestamp,
             log_path=str(log_path),
         ),
         task_type="追加",

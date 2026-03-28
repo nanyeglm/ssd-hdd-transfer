@@ -78,12 +78,15 @@ def run_append(
     archive_path: str,
     conflicts: list[str],
     logger: logging.Logger,
+    *,
+    timestamp: str | None = None,
 ) -> tuple[bool, float]:
-    """Full append pipeline: staging -> mksquashfs append -> checksum.
+    """Full append pipeline: staging -> mksquashfs append -> mark stale.
 
     Returns (success, elapsed).
     """
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    if timestamp is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     staging_dir = ""
 
     logger.info(f"任务启动 | 类型: 数据追加 | PID: {os.getpid()}")

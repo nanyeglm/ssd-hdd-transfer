@@ -1,4 +1,4 @@
-#!/home/cpu/miniforge3/bin/python
+#!/usr/bin/env python3
 """SSD <-> HDD 项目归档工具
 
 所有任务以守护进程执行，终端仅作为可随时断开/重连的跟踪窗口。
